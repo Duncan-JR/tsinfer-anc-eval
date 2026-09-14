@@ -16,7 +16,14 @@ from pathlib import Path
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*LMDBStore*")
 configfile: "config.yaml"
 
-sys.path.append(config["tsinfer_dir"])
+tsinfer_entries = config["tsinfer"]
+tsinfer_versions = [entry["version"] for entry in tsinfer_entries]
+tsinfer_paths = {
+    entry["version"]: Path(entry["path"]).expanduser()
+    for entry in tsinfer_entries
+}
+snakefile_tsinfer_path = tsinfer_paths[tsinfer_versions[0]]
+sys.path.insert(0, str(snakefile_tsinfer_path))
 import tsinfer
 from lib import simulation, utils, errors
 
@@ -239,14 +246,15 @@ rule generate_ancestors:
     resources:
         mem_mb=get_resource("generate_ancestors", "mem_mb"),
         time_min=get_resource("generate_ancestors", "time_min"),
+    params:
+        tsinfer_path=lambda wildcards: tsinfer_paths[wildcards.version],
     shell:
         """
-        source {config[env_dir]}/bin/activate
         python scripts/generate_ancestors.py \
             {input} \
             {output} \
             {log} \
-            --version {wildcards.version} \
+            --tsinfer-path "{params.tsinfer_path}" \
             --threads {threads} \
             --data-dir {config[data_dir]}
         """
@@ -265,7 +273,7 @@ def expand_ancestors_by_version(wildcards):
 
     return [
         data_dir / "ancestors" / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-empgeno-{empgeno}-phase{phase}-mispol{mispol}-v{version}-ancestors.zarr"
-        for version in config["versions"]
+        for version in tsinfer_versions
     ]
 
 checkpoint build_ancestor_chunks:
@@ -285,7 +293,7 @@ checkpoint build_ancestor_chunks:
         time_min=get_resource("build_ancestor_chunks", "time_min"),
     run:
         anc_data_list = [tsinfer.formats.AncestorData.load(path) for path in input[1:]]
-        assert len(anc_data_list) == len(config["versions"])
+        assert len(anc_data_list) == len(tsinfer_versions)
         ts = tskit.load(input[0])
         metadata_path = Path(output[0])
         output_dir = metadata_path.parent
@@ -350,11 +358,10 @@ rule process_ancestor_chunk:
                 assert len(df) > 0
                 print(f"[INFO] Loading tree sequence", flush=True)
                 ts = tskit.load(input.arg_path)
-                versions = config["versions"]
                 print(f"[INFO] Importing AncestorData", flush=True)
                 anc_data_map = {
                     version: tsinfer.formats.AncestorData.load(path)
-                    for path, version in zip(input.anc_data_paths, versions)
+                    for path, version in zip(input.anc_data_paths, tsinfer_versions)
                 }
                 print(f"[INFO] Starting DF generation", flush=True)
                 ds = sgkit.load_dataset(Path(input.zarr_path).parent, consolidated=False)

@@ -3,3 +3,4 @@ config.yaml
 *.egg-info/
 __pycache__/
 data/HapMapII_GRCh38/
+plans/
