@@ -111,23 +111,6 @@ rule simulate:
         )
         arg.dump(output[0])
 
-
-# rule prune_simulated_ts:
-#     input:
-#         data_dir / "simulated" / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-raw.trees",
-#     output:
-#         data_dir
-#         / "simulated"
-#         / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-pruned.trees",
-#     threads: get_resource("prune_simulated_ts", "threads")
-#     resources:
-#         mem_mb=get_resource("prune_simulated_ts", "mem_mb"),
-#         time_min=get_resource("prune_simulated_ts", "time_min"),
-#     run:
-#         arg = tskit.load(input[0])
-#         arg = utils.prune_arg(arg)
-#         arg.dump(output[0])
-
 rule bio2zarr_convert:
     input:
         data_dir

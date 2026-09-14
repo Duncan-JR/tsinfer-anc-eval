@@ -1,35 +1,19 @@
-import numpy as np
-import sgkit
-import xarray as xr
-import pandas as pd
-import json
-import tskit
 import csv
-import math
+import json
 import warnings
+
+import numpy as np
+import pandas as pd
+import sgkit
+import tskit
+import xarray as xr
 from tqdm import tqdm
 
-
-def prune_arg(arg):
-    mutations_count = np.bincount(arg.mutations_site, minlength=arg.num_sites)
-    recurrent = np.where(mutations_count > 1)[0]
-    muts_to_remove = []
-    for site_id in recurrent:
-        muts = arg.site(site_id).mutations
-        assert len(muts) > 1
-        for mut in muts[1:]:
-            muts_to_remove.append(mut.id)
-    tables = arg.dump_tables()
-    mutations = tables.mutations
-    tables.mutations.keep_rows(
-        np.isin(range(len(mutations)), muts_to_remove, invert=True)
-    )
-    return tables.tree_sequence()
 
 def add_zarr_variables(ds, output_path):
     G = ds.call_genotype
     ac = np.sum(G, axis=(1, 2))
-    an = G.shape[1]*2 #num_samples*2
+    an = G.shape[1] * 2  # num_samples*2
     af = ac / an
     assert np.all(af <= 1)
     variables = {
@@ -39,18 +23,19 @@ def add_zarr_variables(ds, output_path):
         "variant_ancestral_state": ds.variant_allele[:, 0],
     }
     arrays = {
-            name: xr.DataArray(data, dims=["variants"], name=name)
-            for name, data in variables.items()
-        }
+        name: xr.DataArray(data, dims=["variants"], name=name)
+        for name, data in variables.items()
+    }
     ds.update(arrays)
 
     sgkit.save_dataset(
-            ds.drop_vars(set(ds.data_vars) - set(arrays.keys())),
-            output_path.parent,
-            mode="a",
-            consolidated=False,
-        )
+        ds.drop_vars(set(ds.data_vars) - set(arrays.keys())),
+        output_path.parent,
+        mode="a",
+        consolidated=False,
+    )
     output_path.touch()
+
 
 def get_carrier_mrca(site, ts, v):
     """
@@ -61,7 +46,7 @@ def get_carrier_mrca(site, ts, v):
         raise ValueError(f"Site {site.id} has no mutations")
     if len(site.mutations) == 1:
         return site.mutations[0].node
-        
+
     tree = ts.at(site.position)
     ancestral_state = site.ancestral_state
     v.decode(site.id)
@@ -75,7 +60,8 @@ def get_carrier_mrca(site, ts, v):
         return None
     else:
         return tree.mrca(*sorted(carriers))
-    
+
+
 def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_path):
     base_anc_data = anc_data_list[0]
     for anc_data in anc_data_list[1:]:
@@ -86,9 +72,11 @@ def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_pa
             base_anc_data.ancestors_focal_sites, anc_data.ancestors_focal_sites
         ):
             assert np.array_equal(sites_1, sites_2)
-            
+
     records = []
-    inf_sites_pos = np.append(base_anc_data.sites_position, base_anc_data.sequence_length)
+    inf_sites_pos = np.append(
+        base_anc_data.sites_position, base_anc_data.sequence_length
+    )
     ts_sites_pos = np.append(ts.sites_position, ts.sequence_length)
     variant = tskit.Variant(ts, isolated_as_missing=False)
     for inf_node, sites in enumerate(base_anc_data.ancestors_focal_sites):
@@ -125,23 +113,28 @@ def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_pa
     with open(metadata_path, "w") as meta_file:
         json.dump({"num_chunks": len(index_chunks)}, meta_file)
 
+
 def build_shared_site_maps(ts, anc_data_map):
     """
-    Build arrays of indices into each sites_position array that correspond to shared sites
-    across all ancestor data and the true tree sequence.
+    Build arrays of indices into each sites_position array that correspond
+    to shared sites across all ancestor data and the true tree sequence.
     """
     shared_pos = ts.sites_position
-    last_pos = ts.sites_position[-1]+1
+    last_pos = ts.sites_position[-1] + 1
 
     for version, anc_data in anc_data_map.items():
-        shared_pos = np.intersect1d(shared_pos, anc_data.sites_position, assume_unique=True)
+        shared_pos = np.intersect1d(
+            shared_pos, anc_data.sites_position, assume_unique=True
+        )
 
     true_shared_idx = np.searchsorted(ts.sites_position, shared_pos)
     anc_shared_idx_maps = {
-        v: np.searchsorted(anc.sites_position, shared_pos) for v, anc in anc_data_map.items()
+        v: np.searchsorted(anc.sites_position, shared_pos)
+        for v, anc in anc_data_map.items()
     }
     shared_pos = np.append(shared_pos, last_pos)
     return shared_pos, true_shared_idx, anc_shared_idx_maps
+
 
 def process_ancestor_chunk(
     df,
@@ -159,17 +152,17 @@ def process_ancestor_chunk(
         ts, anc_data_map
     )
     true_nodes = np.unique(df.true_node)
-    print(f"[INFO] Building expanded TS", flush=True)
+    print("[INFO] Building expanded TS", flush=True)
     tables = ts.dump_tables()
     flags = tables.nodes.flags
     flags[:] = tskit.NODE_IS_SAMPLE
     tables.nodes.flags = flags
     expanded_ts = tables.tree_sequence()
-    print(f"[INFO] Generating genotype matrix", flush=True)
+    print("[INFO] Generating genotype matrix", flush=True)
     true_genotypes = expanded_ts.genotype_matrix(samples=true_nodes).T
     assert true_genotypes.shape[0] == len(true_nodes)
     true_index_map = {true_node: i for i, true_node in enumerate(true_nodes)}
-    
+
     ds_variant_pos = ds.variant_position.values
     include_mispol = ~ds.variant_mispolarisation_mask.values
     ds_shared_idx = np.searchsorted(ds_variant_pos, shared_pos[:-1])
@@ -177,7 +170,7 @@ def process_ancestor_chunk(
     shared_include_mispol = include_mispol[ds_shared_idx].astype("int8")
     allele_frequency = ds.variant_allele_frequency.values
     geno_error_count = ds.variant_genotype_error_count.values
-    print(f"[INFO] Building dataframe", flush=True)
+    print("[INFO] Building dataframe", flush=True)
 
     with open(output_path, "w", newline="") as f:
         writer = None
@@ -214,7 +207,7 @@ def process_ancestor_chunk(
                 anc = anc_data.ancestor(inf_node)
                 anc_dict[version] = anc
                 anc_shared_idx = anc_shared_idx_map[version]
-                anc_left  = np.count_nonzero(anc_shared_idx < anc.start)
+                anc_left = np.count_nonzero(anc_shared_idx < anc.start)
                 anc_right = np.count_nonzero(anc_shared_idx < anc.end)
                 assert anc_left < anc_right
                 anc_interval_dict[version] = (anc_left, anc_right)
@@ -238,14 +231,14 @@ def process_ancestor_chunk(
                 should_be_1 = ~true_olap & inf_olap
                 inferred_boundary = {}
                 inferred_boundary["left"] = shared_pos[inf_left]
-                inferred_boundary["right"]  = shared_pos[inf_right]
+                inferred_boundary["right"] = shared_pos[inf_right]
                 inferred_span = inferred_boundary["right"] - inferred_boundary["left"]
                 num_errors = np.sum(errors)
                 num_should_be_0 = np.sum(should_be_0)
                 num_should_be_1 = np.sum(should_be_1)
                 ds_focal_site = np.searchsorted(ds_variant_pos, row.focal_position)
                 af = allele_frequency[ds_focal_site]
-                #assert math.isclose(af, anc.time, rel_tol=1e-4)
+                # assert math.isclose(af, anc.time, rel_tol=1e-4)
                 for side in ["left", "right"]:
                     record = {
                         "inferred_node": inf_node,
@@ -261,7 +254,9 @@ def process_ancestor_chunk(
                         "true_focal_site": row.true_focal_site,
                         "focal_position": row.focal_position,
                         "focal_site_mispolarised": include_mispol[ds_focal_site],
-                        "focal_site_genotype_error_count": geno_error_count[ds_focal_site],
+                        "focal_site_genotype_error_count": geno_error_count[
+                            ds_focal_site
+                        ],
                         "allele_frequency": af,
                         "true_time": true_time,
                         "inferred_time": anc.time,
@@ -273,8 +268,8 @@ def process_ancestor_chunk(
                         "overlap_span": olap_span,
                         "overlap_site_span": olap_site_span,
                         "num_errors": num_errors,
-                        "num_errors_per_bp": num_errors/olap_span,
-                        "num_errors_per_site": num_errors/olap_site_span,
+                        "num_errors_per_bp": num_errors / olap_span,
+                        "num_errors_per_site": num_errors / olap_site_span,
                         "num_should_be_0": num_should_be_0,
                         "num_should_be_1": num_should_be_1,
                     }
