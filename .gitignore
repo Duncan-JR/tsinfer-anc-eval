@@ -1,0 +1,5 @@
+config.yaml
+.snakemake/
+*.egg-info/
+__pycache__/
+data/HapMapII_GRCh38/

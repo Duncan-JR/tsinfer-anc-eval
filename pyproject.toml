@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tsinfer-anc-evaluation"
+version = "0.0.0"
+description = "Ancestor-evaluation pipeline for tsinfer"
+requires-python = ">=3.11"
+dependencies = [
+    "click",
+    "numpy>=2",
+    "numba",
+    "tqdm",
+    "tskit>=1.0.0",
+    "zarr<3",
+    "bio2zarr",
+    "pandas",
+    "msprime>=1.4.2",
+    "stdpopsim>=0.3.0",
+    "sgkit==0.10.0",
+    "snakemake",
+    "pyyaml",
+    "xarray",
+    "pytest",
+]
+
+[tool.setuptools]
+packages = ["lib"]
