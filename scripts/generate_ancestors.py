@@ -1,10 +1,16 @@
 import os
 import sys
-import click
-import tskit
-from pathlib import Path
 import warnings
-warnings.filterwarnings("ignore", category=FutureWarning, message=".*LMDBStore is deprecated.*")
+from pathlib import Path
+
+import click
+
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    message=".*LMDBStore is deprecated.*",
+)
+
 
 @click.command()
 @click.argument("input", type=click.Path(exists=True))
@@ -13,8 +19,6 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=".*LMDBStore i
 @click.option("--version", required=True, type=str)
 @click.option("--threads", required=True, type=int)
 @click.option("--data-dir", required=True, type=click.Path())
-
-
 def generate_ancestors(input, output, log, version, threads, data_dir):
     """Generate ancestors from a tree sequence."""
 
@@ -27,6 +31,7 @@ def generate_ancestors(input, output, log, version, threads, data_dir):
 
     sys.path.append(tsinfer_path)
     import tsinfer
+
     data_dir = Path(data_dir)
     vdata = tsinfer.VariantData(
         input.replace(".mods_done", ""),
@@ -49,7 +54,6 @@ def generate_ancestors(input, output, log, version, threads, data_dir):
         if ancestors.num_sites == 0:
             raise ValueError("No sites generated")
 
+
 if __name__ == "__main__":
     generate_ancestors()
-
-

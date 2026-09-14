@@ -1,6 +1,7 @@
+import warnings
+
 import msprime
 import stdpopsim
-import warnings
 
 
 def simulate(model, contig, samples, left, right, seed):
@@ -18,7 +19,10 @@ def simulate(model, contig, samples, left, right, seed):
         warnings.filterwarnings(
             "ignore",
             category=UserWarning,
-            message=r"The demographic model has mutation rate .* but this simulation used the contig's mutation rate 0.*",
+            message=(
+                r"The demographic model has mutation rate .* but this simulation "
+                r"used the contig's mutation rate 0.*"
+            ),
         )
         ts = engine.simulate(
             demographic_model,
@@ -29,8 +33,5 @@ def simulate(model, contig, samples, left, right, seed):
         )
     mutation_rate = demographic_model.mutation_rate
     return msprime.sim_mutations(
-        ts,
-        rate=mutation_rate,
-        random_seed=seed,
-        model=msprime.BinaryMutationModel()
+        ts, rate=mutation_rate, random_seed=seed, model=msprime.BinaryMutationModel()
     )
