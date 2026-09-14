@@ -25,5 +25,18 @@ dependencies = [
     "pytest",
 ]
 
+[dependency-groups]
+lint = [
+    "prek==0.3.3",
+    "ruff==0.15.1",
+]
+
 [tool.setuptools]
 packages = ["lib"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 89
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
