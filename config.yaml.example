@@ -1,6 +1,6 @@
 prefix: "set -euo pipefail; "
-data_dir: "data/anc_eval"
-progress_dir: "data/anc_eval/progress"
+data_dir: "data"
+progress_dir: ".progress"
 error_probs_path: "data/external/EmpiricalErrorPlatinum1000G.csv"
 
 tsinfer:
@@ -13,15 +13,15 @@ sims:
   - model: "OutOfAfrica_4J17"
     contig: "chr20"
     left: 0
-    right: 1e6
+    right: 1e7
     samples: {"CEU": 100, "CHB": 100, "YRI": 100}
     num_reps: 1
     seed: 1
 
 error_configs:
-  - empgeno: "off"
-    phase: 0
-    mispol: 0
+  - geno_multiplier: 0.0
+    phase_ser: 0.0
+    mispol_rate: 0.0
     name: "none"
 
 ancestor_chunk_size: 5000

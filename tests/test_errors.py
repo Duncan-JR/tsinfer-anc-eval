@@ -114,6 +114,67 @@ class TestFetchEmpiricalProbs:
         assert np.all(out == 1)
 
 
+class TestGenotypeErrorMultiplier:
+    @pytest.fixture
+    def genotype_probs(self):
+        return np.array(
+            [
+                [0.90, 0.08, 0.02],
+                [0.05, 0.90, 0.05],
+                [0.02, 0.08, 0.90],
+            ]
+        )
+
+    def test_zero_gives_identity(self, genotype_probs):
+        scaled = errors.scale_genotype_error_probs(genotype_probs, 0)
+        assert np.allclose(scaled, np.eye(3))
+
+    def test_one_preserves_matrix(self, genotype_probs):
+        scaled = errors.scale_genotype_error_probs(genotype_probs, 1)
+        assert np.allclose(scaled, genotype_probs)
+
+    def test_two_doubles_nonsaturated_errors(self, genotype_probs):
+        scaled = errors.scale_genotype_error_probs(genotype_probs, 2)
+        expected = np.array(
+            [
+                [0.80, 0.16, 0.04],
+                [0.10, 0.80, 0.10],
+                [0.04, 0.16, 0.80],
+            ]
+        )
+        assert np.allclose(scaled, expected)
+
+    def test_saturation_preserves_error_proportions(self):
+        probs = np.array(
+            [
+                [0.40, 0.50, 0.10],
+                [0.05, 0.90, 0.05],
+                [0.02, 0.08, 0.90],
+            ]
+        )
+        scaled = errors.scale_genotype_error_probs(probs, 2)
+        assert scaled[0, 0] == 0
+        assert np.allclose(scaled[0, 1:], [5 / 6, 1 / 6])
+        assert np.isclose(scaled[0, 1:].sum(), 1)
+        assert np.isclose(scaled[0, 1] / scaled[0, 2], 5)
+
+    def test_exact_saturation_boundary(self):
+        probs = np.array(
+            [
+                [0.50, 0.40, 0.10],
+                [0.05, 0.90, 0.05],
+                [0.02, 0.08, 0.90],
+            ]
+        )
+        scaled = errors.scale_genotype_error_probs(probs, 2)
+        assert scaled[0, 0] == 0
+        assert np.isclose(scaled[0, 1:].sum(), 1)
+
+    def test_negative_multiplier_rejected(self, genotype_probs):
+        with pytest.raises(ValueError):
+            errors.scale_genotype_error_probs(genotype_probs, -1)
+
+
 class TestEncodeDecodeRoundTrip:
     """
     Round‑tripping through encode/ decode must be lossless.
@@ -176,7 +237,7 @@ class TestPhaseSwitchErrorRate:
     def test_zero_error_rate(self, large_genotype_matrix, rng):
         G_in = large_genotype_matrix
         G_out, call_genotype_phase, sample_switch_count = errors.add_phase_switch_errors(
-            G_in, switch_error_rate=0, rng=rng
+            G_in, phase_ser=0, rng=rng
         )
         num_sites = G_in.shape[0]
         num_samples = G_in.shape[1]
@@ -196,7 +257,7 @@ class TestPhaseSwitchErrorRate:
         d_expected = np.array([[0, 1], [1, 0], [0, 1], [1, 0]])
         phase_expected = np.array([0, 1, 0, 1], dtype=bool)
         d_out, phase_array, num_switches = errors.sample_phase_switches(
-            d_in, ser=1, rng=rng
+            d_in, phase_ser=1, rng=rng
         )
         assert_array_equal(d_out, d_expected)
         assert_array_equal(phase_array, phase_expected)
@@ -213,21 +274,21 @@ class TestInvalidGenotypeData:
         with pytest.raises(AssertionError):
             errors.add_empirical_genotype_errors(G, rng, lambda f: np.eye(4))
         with pytest.raises(AssertionError):
-            errors.add_phase_switch_errors(G, switch_error_rate=0, rng=rng)
+            errors.add_phase_switch_errors(G, phase_ser=0, rng=rng)
 
     def test_wrong_ploidy(self, rng):
         G = np.zeros((2, 3, 3), dtype=np.int8)
         with pytest.raises(AssertionError):
             errors.add_empirical_genotype_errors(G, rng, lambda f: np.eye(4))
         with pytest.raises(AssertionError):
-            errors.add_phase_switch_errors(G, switch_error_rate=0, rng=rng)
+            errors.add_phase_switch_errors(G, phase_ser=0, rng=rng)
 
     def test_wrong_rank(self, rng):
         G = np.zeros((4, 2), dtype=np.int8)
         with pytest.raises(AssertionError):
             errors.add_empirical_genotype_errors(G, rng, lambda f: np.eye(4))
         with pytest.raises(AssertionError):
-            errors.add_phase_switch_errors(G, switch_error_rate=0, rng=rng)
+            errors.add_phase_switch_errors(G, phase_ser=0, rng=rng)
 
 
 class TestUnbiasedMispolarise:

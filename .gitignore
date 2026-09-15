@@ -2,5 +2,14 @@ config.yaml
 .snakemake/
 *.egg-info/
 __pycache__/
-data/HapMapII_GRCh38/
+data/external/HapMapII_GRCh38/
 plans/
+*.DS_Store
+
+# Pipeline output
+.progress
+data/ancestors
+data/chunks
+data/dataframes
+data/simulated
+data/zarr_vcfs
