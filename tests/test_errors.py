@@ -133,18 +133,22 @@ class TestGenotypeErrorMultiplier:
         scaled = errors.scale_genotype_error_probs(genotype_probs, 1)
         assert np.allclose(scaled, genotype_probs)
 
-    def test_two_doubles_nonsaturated_errors(self, genotype_probs):
+    def test_zero_empirical_error_remains_error_free(self):
+        scaled = errors.scale_genotype_error_probs(np.eye(3), 2)
+        assert np.allclose(scaled, np.eye(3))
+
+    def test_two_scales_error_hazard(self, genotype_probs):
         scaled = errors.scale_genotype_error_probs(genotype_probs, 2)
         expected = np.array(
             [
-                [0.80, 0.16, 0.04],
-                [0.10, 0.80, 0.10],
-                [0.04, 0.16, 0.80],
+                [0.81, 0.152, 0.038],
+                [0.095, 0.81, 0.095],
+                [0.038, 0.152, 0.81],
             ]
         )
         assert np.allclose(scaled, expected)
 
-    def test_saturation_preserves_error_proportions(self):
+    def test_scaling_preserves_error_proportions(self):
         probs = np.array(
             [
                 [0.40, 0.50, 0.10],
@@ -153,12 +157,10 @@ class TestGenotypeErrorMultiplier:
             ]
         )
         scaled = errors.scale_genotype_error_probs(probs, 2)
-        assert scaled[0, 0] == 0
-        assert np.allclose(scaled[0, 1:], [5 / 6, 1 / 6])
-        assert np.isclose(scaled[0, 1:].sum(), 1)
+        assert np.allclose(scaled[0], [0.16, 0.70, 0.14])
         assert np.isclose(scaled[0, 1] / scaled[0, 2], 5)
 
-    def test_exact_saturation_boundary(self):
+    def test_finite_multiplier_does_not_saturate(self):
         probs = np.array(
             [
                 [0.50, 0.40, 0.10],
@@ -167,8 +169,7 @@ class TestGenotypeErrorMultiplier:
             ]
         )
         scaled = errors.scale_genotype_error_probs(probs, 2)
-        assert scaled[0, 0] == 0
-        assert np.isclose(scaled[0, 1:].sum(), 1)
+        assert np.allclose(scaled[0], [0.25, 0.60, 0.15])
 
     def test_negative_multiplier_rejected(self, genotype_probs):
         with pytest.raises(ValueError):

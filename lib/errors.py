@@ -6,7 +6,11 @@ from numba import njit
 
 
 def scale_genotype_error_probs(probs, geno_multiplier):
-    """Scale off-diagonal genotype-error probabilities independently by row."""
+    """Scale the cumulative genotype-error hazard independently by row.
+
+    The correct-call probability is raised to ``geno_multiplier`` and the
+    empirical proportions of the two error outcomes are preserved.
+    """
     if not np.isfinite(geno_multiplier) or geno_multiplier < 0:
         message = "geno_multiplier must be a finite value greater than or equal to 0"
         raise ValueError(message)
@@ -14,16 +18,14 @@ def scale_genotype_error_probs(probs, geno_multiplier):
     scaled_probs = np.zeros_like(probs, dtype=float)
     for true_genotype in range(3):
         error_genotypes = np.arange(3) != true_genotype
-        scaled_errors = probs[true_genotype, error_genotypes] * geno_multiplier
-        off_diag_sum = scaled_errors.sum()
-        if off_diag_sum >= 1:
-            normalization_constant = 1 / off_diag_sum
-            scaled_errors *= normalization_constant
-            diagonal = 0
-        else:
-            diagonal = 1 - off_diag_sum
-        scaled_probs[true_genotype, error_genotypes] = scaled_errors
-        scaled_probs[true_genotype, true_genotype] = diagonal
+        correct_prob = probs[true_genotype, true_genotype]
+        error_prob = 1 - correct_prob
+        scaled_error_prob = 1 - correct_prob**geno_multiplier
+        if error_prob > 0:
+            error_scale = scaled_error_prob / error_prob
+            scaled_errors = probs[true_genotype, error_genotypes] * error_scale
+            scaled_probs[true_genotype, error_genotypes] = scaled_errors
+        scaled_probs[true_genotype, true_genotype] = 1 - scaled_error_prob
 
     return scaled_probs
 
