@@ -291,13 +291,17 @@ def add_errors(
         name="variant_mispolarised_ancestral_state",
     )
 
-    new_ds = ds.copy()
     v_chunk = ds.call_genotype.chunks[0][0]
     s_chunk = ds.call_genotype.chunks[1][0]
     G_xr = xr.DataArray(
         G_out, dims=["variants", "samples", "ploidy"], name="call_genotype"
     ).chunk({"variants": v_chunk, "samples": s_chunk})
-    new_ds["call_genotype"] = G_xr
-    new_ds.update(new_vars)
-    sgkit.save_dataset(new_ds, output_path.parent)
+    ds["call_genotype"] = G_xr
+    ds.update(new_vars)
+
+    contig_id = ds.contig_id.values.astype(str)
+    sample_id = ds.sample_id.values.astype(str)
+    ds["contig_id"] = ds.contig_id.copy(data=contig_id)
+    ds["sample_id"] = ds.sample_id.copy(data=sample_id)
+    sgkit.save_dataset(ds, output_path.parent)
     output_path.touch()
