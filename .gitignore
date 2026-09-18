@@ -8,8 +8,4 @@ plans/
 
 # Pipeline output
 .progress
-data/ancestors
-data/chunks
-data/dataframes
-data/simulated
-data/zarr_vcfs
+data/anc_eval

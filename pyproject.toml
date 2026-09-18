@@ -37,7 +37,6 @@ lint = [
     "prek==0.3.3",
     "ruff==0.15.1",
 ]
-
 [tool.uv]
 default-groups = ["lint"]
 
