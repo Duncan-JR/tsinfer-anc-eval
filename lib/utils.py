@@ -1,6 +1,5 @@
 import csv
 import json
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -37,10 +36,10 @@ def add_zarr_variables(ds, output_path):
     output_path.touch()
 
 
-def get_carrier_mrca(site, ts, v):
+def get_true_ancestor(site, ts):
     """
     Return the mutation node for non-recurrent sites and, for recurrent sites,
-    the MRCA of the samples carrying the non-ancestral allele.
+    the mutation node with the most descendant samples for the derived allele.
     """
     if len(site.mutations) == 0:
         raise ValueError(f"Site {site.id} has no mutations")
@@ -48,18 +47,16 @@ def get_carrier_mrca(site, ts, v):
         return site.mutations[0].node
 
     tree = ts.at(site.position)
-    ancestral_state = site.ancestral_state
-    v.decode(site.id)
-    derived = next(a for a in v.alleles if a is not None and a != ancestral_state)
-    carriers = v.samples[v.genotypes == v.alleles.index(derived)]
-    if len(carriers) == 0:
-        warnings.warn(
-            f"No carriers of the mutation at site {site.id} exist in the true ARG",
-            stacklevel=2,
-        )
-        return None
-    else:
-        return tree.mrca(*sorted(carriers))
+    derived_mutations = [
+        mutation
+        for mutation in site.mutations
+        if mutation.derived_state != site.ancestral_state
+    ]
+    mutation = max(
+        derived_mutations,
+        key=lambda mutation: tree.num_samples(mutation.node),
+    )
+    return mutation.node
 
 
 def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_path):
@@ -78,15 +75,12 @@ def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_pa
         base_anc_data.sites_position, base_anc_data.sequence_length
     )
     ts_sites_pos = np.append(ts.sites_position, ts.sequence_length)
-    variant = tskit.Variant(ts, isolated_as_missing=False)
     for inf_node, sites in enumerate(base_anc_data.ancestors_focal_sites):
         for inf_site_id in sites:
             pos = inf_sites_pos[inf_site_id]
             true_site_id = np.searchsorted(ts_sites_pos, pos)
             site = ts.site(true_site_id)
-            true_node = get_carrier_mrca(site, ts, variant)
-            if true_node is None:
-                continue
+            true_node = get_true_ancestor(site, ts)
             records.append(
                 {
                     "inf_focal_site": inf_site_id,
@@ -182,6 +176,7 @@ def process_ancestor_chunk(
             mininterval=5,
         ):
             true_node = row.true_node
+            num_mutations = len(ts.site(row.true_focal_site).mutations)
             true_node_index = true_index_map[true_node]
             a = true_genotypes[true_node_index]
             a_shared = a[true_shared_idx]
@@ -252,6 +247,7 @@ def process_ancestor_chunk(
                         "side": side,
                         "inf_focal_site": row.inf_focal_site,
                         "true_focal_site": row.true_focal_site,
+                        "num_mutations": num_mutations,
                         "focal_position": row.focal_position,
                         "focal_site_mispolarised": include_mispol[ds_focal_site],
                         "focal_site_genotype_error_count": geno_error_count[
