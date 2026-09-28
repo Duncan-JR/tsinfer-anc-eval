@@ -197,10 +197,10 @@ rule add_errors:
         / "zarr_vcfs"
         / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}.zarr"
         / ".mods_done",
-    threads: get_resource("add_genotype_errors", "threads")
+    threads: get_resource("add_errors", "threads")
     resources:
-        mem_mb=get_resource("add_genotype_errors", "mem_mb"),
-        time_min=get_resource("add_genotype_errors", "time_min"),
+        mem_mb=get_resource("add_errors", "mem_mb"),
+        time_min=get_resource("add_errors", "time_min"),
     run:
         output_path = Path(output[0])
         ds = sgkit.load_dataset(Path(input[0]).parent, consolidated=False)
