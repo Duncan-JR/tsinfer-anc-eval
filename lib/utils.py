@@ -1,5 +1,6 @@
 import csv
 import json
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -36,25 +37,40 @@ def add_zarr_variables(ds, output_path):
     output_path.touch()
 
 
-def get_true_ancestor(site, ts):
+def get_true_ancestor(site, ts, variant):
     """
     Return the mutation node for non-recurrent sites and, for recurrent sites,
-    the mutation node with the most descendant samples for the derived allele.
+    the mutation node with the most descendant derived-allele carriers.
     """
     if len(site.mutations) == 0:
         raise ValueError(f"Site {site.id} has no mutations")
     if len(site.mutations) == 1:
         return site.mutations[0].node
 
-    tree = ts.at(site.position)
+    variant.decode(site.id)
+    derived_allele = next(
+        allele
+        for allele in variant.alleles
+        if allele is not None and allele != site.ancestral_state
+    )
+    derived_index = variant.alleles.index(derived_allele)
+    carriers = variant.samples[variant.genotypes == derived_index]
+    if len(carriers) == 0:
+        warnings.warn(
+            f"No carriers of the mutation at site {site.id} exist in the true ARG",
+            stacklevel=2,
+        )
+        return None
+
+    tree = ts.at(site.position, tracked_samples=carriers)
     derived_mutations = [
         mutation
         for mutation in site.mutations
-        if mutation.derived_state != site.ancestral_state
+        if mutation.derived_state == derived_allele
     ]
     mutation = max(
         derived_mutations,
-        key=lambda mutation: tree.num_samples(mutation.node),
+        key=lambda mutation: tree.num_tracked_samples(mutation.node),
     )
     return mutation.node
 
@@ -75,12 +91,15 @@ def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_pa
         base_anc_data.sites_position, base_anc_data.sequence_length
     )
     ts_sites_pos = np.append(ts.sites_position, ts.sequence_length)
+    variant = tskit.Variant(ts, isolated_as_missing=False)
     for inf_node, sites in enumerate(base_anc_data.ancestors_focal_sites):
         for inf_site_id in sites:
             pos = inf_sites_pos[inf_site_id]
             true_site_id = np.searchsorted(ts_sites_pos, pos)
             site = ts.site(true_site_id)
-            true_node = get_true_ancestor(site, ts)
+            true_node = get_true_ancestor(site, ts, variant)
+            if true_node is None:
+                continue
             records.append(
                 {
                     "inf_focal_site": inf_site_id,
