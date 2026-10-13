@@ -76,6 +76,7 @@ def get_true_ancestor(site, ts, variant):
 
 
 def build_ancestor_chunks(anc_data_list, ts, output_dir, chunk_size, metadata_path):
+    """Write chunks in nondecreasing inf_node order for process_ancestor_chunk."""
     base_anc_data = anc_data_list[0]
     for anc_data in anc_data_list[1:]:
         assert base_anc_data.num_ancestors == anc_data.num_ancestors
@@ -149,6 +150,23 @@ def build_shared_site_maps(ts, anc_data_map):
     return shared_pos, true_shared_idx, anc_shared_idx_maps
 
 
+def decode_true_genotypes(ts, true_nodes, true_shared_idx):
+    """Decode shared sites for process_ancestor_chunk into contiguous int8 rows.
+
+    The caller supplies the expanded tree sequence, selected nodes, and sorted
+    shared site IDs. Rows follow true_nodes and columns follow true_shared_idx;
+    values are missing (-1), ancestral (0), or derived (1).
+    """
+    variant = tskit.Variant(ts, samples=true_nodes, isolated_as_missing=True)
+    shared_genotypes = np.empty((len(true_shared_idx), len(true_nodes)), dtype=np.int8)
+    for row, site_id in enumerate(true_shared_idx):
+        variant.decode(site_id)
+        genotypes = variant.genotypes
+        shared_genotypes[row] = genotypes > 0
+        shared_genotypes[row, genotypes == tskit.MISSING_DATA] = tskit.MISSING_DATA
+    return np.ascontiguousarray(shared_genotypes.T)
+
+
 def process_ancestor_chunk(
     df,
     ts,
@@ -161,6 +179,18 @@ def process_ancestor_chunk(
     mispol_rate,
     output_path,
 ):
+    """Compare a chunk whose rows are in nondecreasing inf_node order.
+
+    Use decode_true_genotypes to retain only the shared sites for each true node.
+    """
+    assert df.inf_node.is_monotonic_increasing
+    inf_nodes = np.unique(df.inf_node.to_numpy(dtype=int))
+    ancestor_iterators = {
+        version: anc_data.ancestors(indexes=inf_nodes)
+        for version, anc_data in anc_data_map.items()
+    }
+    current_inf_node = None
+    anc_dict = {}
     shared_pos, true_shared_idx, anc_shared_idx_map = build_shared_site_maps(
         ts, anc_data_map
     )
@@ -171,8 +201,8 @@ def process_ancestor_chunk(
     flags[:] = tskit.NODE_IS_SAMPLE
     tables.nodes.flags = flags
     expanded_ts = tables.tree_sequence()
-    print("[INFO] Generating genotype matrix", flush=True)
-    true_genotypes = expanded_ts.genotype_matrix(samples=true_nodes).T
+    print("[INFO] Decoding shared-site genotype matrix", flush=True)
+    true_genotypes = decode_true_genotypes(expanded_ts, true_nodes, true_shared_idx)
     assert true_genotypes.shape[0] == len(true_nodes)
     true_index_map = {true_node: i for i, true_node in enumerate(true_nodes)}
 
@@ -197,8 +227,7 @@ def process_ancestor_chunk(
             true_node = row.true_node
             num_mutations = len(ts.site(row.true_focal_site).mutations)
             true_node_index = true_index_map[true_node]
-            a = true_genotypes[true_node_index]
-            a_shared = a[true_shared_idx]
+            a_shared = true_genotypes[true_node_index]
             segment = np.where(a_shared != tskit.MISSING_DATA)[0]
             assert len(segment) > 0
             true_left = segment[0]
@@ -208,6 +237,12 @@ def process_ancestor_chunk(
             )
             true_time = ts.nodes_time[true_node]
             inf_node = row.inf_node
+            if inf_node != current_inf_node:
+                anc_dict = {
+                    version: next(ancestors)
+                    for version, ancestors in ancestor_iterators.items()
+                }
+                current_inf_node = inf_node
             true_boundary = {}
             true_boundary["left"] = shared_pos[true_left]
             true_boundary["right"] = shared_pos[true_right]
@@ -215,14 +250,11 @@ def process_ancestor_chunk(
 
             olap_left = true_left
             olap_right = true_right
-            anc_dict = {}
             anc_interval_dict = {}
-            for version, anc_data in anc_data_map.items():
-                anc = anc_data.ancestor(inf_node)
-                anc_dict[version] = anc
+            for version, anc in anc_dict.items():
                 anc_shared_idx = anc_shared_idx_map[version]
-                anc_left = np.count_nonzero(anc_shared_idx < anc.start)
-                anc_right = np.count_nonzero(anc_shared_idx < anc.end)
+                anc_left = np.searchsorted(anc_shared_idx, anc.start, side="left")
+                anc_right = np.searchsorted(anc_shared_idx, anc.end, side="left")
                 assert anc_left < anc_right
                 anc_interval_dict[version] = (anc_left, anc_right)
                 olap_left = max(olap_left, anc_left)
