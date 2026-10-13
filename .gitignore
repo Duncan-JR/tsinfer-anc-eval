@@ -3,7 +3,6 @@ config.yaml
 *.egg-info/
 __pycache__/
 data/external/HapMapII_GRCh38/
-plans/
 *.DS_Store
 
 # Pipeline output
