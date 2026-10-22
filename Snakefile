@@ -203,7 +203,6 @@ rule add_errors:
         time_min=get_resource("add_errors", "time_min"),
     run:
         output_path = Path(output[0])
-        ds = sgkit.load_dataset(Path(input[0]).parent, consolidated=False)
         error_csv_path = config["error_probs_path"]
         geno_multiplier = float(wildcards.geno_multiplier)
         phase_ser = float(wildcards.phase_ser)
@@ -213,7 +212,7 @@ rule add_errors:
         assert 0 <= mispol_rate <= 1
         seed = int(wildcards.seed) + int(wildcards.rep)
         errors.add_errors(
-            ds=ds,
+            input_path=Path(input[0]).parent,
             output_path=output_path,
             error_csv_path=error_csv_path,
             geno_multiplier=geno_multiplier,

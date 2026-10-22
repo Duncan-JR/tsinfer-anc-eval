@@ -3,6 +3,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import sgkit
+import xarray as xr
+import zarr
 from numpy.testing import assert_array_equal
 
 from lib import errors
@@ -342,3 +345,124 @@ class TestUnbiasedMispolarise:
         )
         assert_array_equal(include_mispol, np.ones(4, dtype=bool))
         assert_array_equal(mispol_ancestral, np.full(4, "T", dtype="<U1"))
+
+
+class TestChunkedErrorAddition:
+    @pytest.fixture
+    def dataset(self):
+        rng = np.random.default_rng(123)
+        genotypes = rng.integers(0, 2, size=(17, 7, 2), dtype=np.int8)
+        genotypes[0] = 0
+        genotypes[-1] = 1
+        genotypes[:, 0] = [0, 1]
+        genotypes[:, 1] = 0
+        allele_count = genotypes.sum(axis=(1, 2))
+        dataset = xr.Dataset(
+            {
+                "call_genotype": (("variants", "samples", "ploidy"), genotypes),
+                "call_genotype_mask": (("variants", "samples", "ploidy"), genotypes < 0),
+                "variant_position": ("variants", np.arange(17)),
+                "variant_allele": (
+                    ("variants", "alleles"),
+                    np.tile(np.array(["A", "T"], dtype=object), (17, 1)),
+                ),
+                "variant_ancestral_state": ("variants", np.full(17, "A", dtype=object)),
+                "variant_singleton_mask": ("variants", allele_count == 1),
+                "variant_allele_count": ("variants", allele_count),
+                "sample_id": ("samples", np.arange(7).astype(str).astype(object)),
+                "contig_id": ("contigs", np.array(["chr20"], dtype=object)),
+            },
+            attrs={"description": "error addition regression fixture"},
+        )
+        dataset.call_genotype.attrs["description"] = "Genotypes before errors"
+        return dataset
+
+    @pytest.fixture
+    def error_csv_path(self):
+        return Path("data/external/EmpiricalErrorPlatinum1000G.csv")
+
+    def in_memory_output(self, ds, error_csv_path, geno, phase, mispol, seed):
+        """The original add_errors calculation, before chunked storage I/O."""
+        ds = ds.copy(deep=True)
+        rng = np.random.default_rng(seed)
+        G_in = ds.call_genotype.values
+        G_geno_error = G_in
+        if geno > 0:
+            df = pd.read_csv(error_csv_path, index_col=0)
+            G_geno_error = errors.add_empirical_genotype_errors(
+                G_in, rng, errors.fetch_empirical_probs, df=df, geno_multiplier=geno
+            )
+        unchanged = G_geno_error == G_in
+        counts = np.sum(~unchanged, axis=(1, 2))
+        G_out, phase_mask, switches = errors.add_phase_switch_errors(
+            G_geno_error, phase, rng
+        )
+        include_mispol, ancestral = errors.unbiased_mispolarise(
+            ds.variant_allele.values,
+            ds.variant_ancestral_state.values,
+            mispol,
+            rng,
+            ds.variant_singleton_mask.values,
+        )
+        ds["call_genotype"] = (("variants", "samples", "ploidy"), G_out)
+        ds["call_genotype_error_mask"] = (("variants", "samples", "ploidy"), unchanged)
+        ds["variant_genotype_error_count"] = ("variants", counts)
+        ds["call_genotype_phase"] = (("variants", "samples"), phase_mask)
+        ds["sample_phase_switch_count"] = ("samples", switches)
+        ds["variant_mispolarisation_mask"] = ("variants", ~include_mispol)
+        ds["variant_mispolarised_ancestral_state"] = ("variants", ancestral)
+        for name in ["contig_id", "sample_id"]:
+            ds[name] = ds[name].astype(str)
+        return ds
+
+    @pytest.mark.parametrize("chunks", [(1, 1), (4, 3), (8, 7), (17, 7)])
+    @pytest.mark.parametrize(
+        "geno,phase,mispol",
+        [(0, 0, 0), (1, 0, 0.4), (1, 0.5, 0.4), (2, 1, 1), (0, 0.5, 0)],
+    )
+    @pytest.mark.parametrize("seed", [21, 42])
+    def test_matches_in_memory(
+        self, tmp_path, dataset, error_csv_path, chunks, geno, phase, mispol, seed
+    ):
+        source_path = tmp_path / "source.zarr"
+        output_path = tmp_path / "output.zarr" / ".mods_done"
+        variant_chunk, sample_chunk = chunks
+        source = dataset.chunk({"variants": variant_chunk, "samples": sample_chunk})
+        sgkit.save_dataset(source, source_path)
+        (source_path / ".mods_done").touch()
+        (source_path / ".vcf_done").touch()
+        expected = self.in_memory_output(
+            dataset, error_csv_path, geno, phase, mispol, seed
+        )
+        errors.add_errors(
+            source_path, output_path, error_csv_path, geno, phase, mispol, seed
+        )
+        actual = sgkit.load_dataset(output_path.parent)
+        xr.testing.assert_identical(actual.compute(), expected)
+        xr.testing.assert_identical(sgkit.load_dataset(source_path).compute(), dataset)
+        assert output_path.exists()
+        assert not (output_path.parent / ".vcf_done").exists()
+        root = zarr.open_group(str(output_path.parent), mode="r")
+        assert root["call_genotype"].chunks == (variant_chunk, sample_chunk, 2)
+        assert root["call_genotype_error_mask"].chunks == root["call_genotype"].chunks
+
+    @pytest.mark.parametrize("phase", [0, 0.5])
+    def test_genotype_reads_are_bounded(
+        self, tmp_path, dataset, error_csv_path, monkeypatch, phase
+    ):
+        source_path = tmp_path / "source.zarr"
+        output_path = tmp_path / "output.zarr" / ".mods_done"
+        sgkit.save_dataset(dataset.chunk({"variants": 4, "samples": 3}), source_path)
+        original_getitem = zarr.Array.__getitem__
+        read_shapes = []
+
+        def getitem(array, selection):
+            result = original_getitem(array, selection)
+            if array.name == "/call_genotype":
+                read_shapes.append(result.shape)
+                assert result.shape[0] <= 4 or result.shape[1] <= 3
+            return result
+
+        monkeypatch.setattr(zarr.Array, "__getitem__", getitem)
+        errors.add_errors(source_path, output_path, error_csv_path, 1, phase, 0.4, 21)
+        assert len(read_shapes) > 0

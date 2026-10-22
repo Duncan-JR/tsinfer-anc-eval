@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
-import sgkit
-import xarray as xr
+import zarr
 from numba import njit
 
 
@@ -204,8 +203,28 @@ def unbiased_mispolarise(
     return include_mispol, mispol_ancestral
 
 
+def _create_error_array(root, name, dims, dtype, filters=None):
+    """Create an xarray-compatible array aligned with the genotype chunks."""
+    genotypes = root["call_genotype"]
+    genotype_dims = genotypes.attrs["_ARRAY_DIMENSIONS"]
+    axes = [genotype_dims.index(dim) for dim in dims]
+    shape = tuple(genotypes.shape[axis] for axis in axes)
+    chunks = tuple(genotypes.chunks[axis] for axis in axes)
+    array = root.create_dataset(
+        name,
+        shape=shape,
+        chunks=chunks,
+        dtype=dtype,
+        compressor=genotypes.compressor,
+        filters=filters,
+        fill_value=None,
+    )
+    array.attrs["_ARRAY_DIMENSIONS"] = dims
+    return array
+
+
 def add_errors(
-    ds,
+    input_path,
     output_path,
     error_csv_path,
     geno_multiplier,
@@ -213,14 +232,14 @@ def add_errors(
     mispol_rate,
     seed,
 ):
-    def add_xarray(dict, array, dims, name):
-        xarray = xr.DataArray(array, dims=dims, name=name)
-        dict[name] = xarray
+    """Add errors using variant blocks, then sample blocks for phase switches.
 
-    new_vars = {}
-    rng = np.random.default_rng(seed=seed)
-    G_in = ds.call_genotype.values
-
+    The separate passes preserve the random draw order of the in-memory helpers:
+    genotype errors by site, phase switches by sample, then mispolarisation.
+    Block widths come from the stored genotype chunks. Peak genotype memory is
+    proportional to variants_per_chunk * samples, or (when phasing is enabled)
+    variants * samples_per_chunk, rather than variants * samples.
+    """
     if not np.isfinite(geno_multiplier) or geno_multiplier < 0:
         message = "geno_multiplier must be a finite value greater than or equal to 0"
         raise ValueError(message)
@@ -229,79 +248,104 @@ def add_errors(
     if not 0 <= mispol_rate <= 1:
         raise ValueError("mispol_rate must be between 0 and 1")
 
-    # Genotype errors
+    source = zarr.open_group(str(input_path), mode="r")
+    root = zarr.open_group(str(output_path.parent), mode="w")
+    # Copy compressed chunks directly, without decoding the input dataset.
+    zarr.copy_store(
+        source.store,
+        root.store,
+        excludes=r"(^|/)\.(mods_done|vcf_done)$",
+        if_exists="replace",
+    )
+    genotypes = root["call_genotype"]
+    # Match replacement of call_genotype by the original xarray implementation.
+    genotypes.attrs.put({"_ARRAY_DIMENSIONS": ["variants", "samples", "ploidy"]})
+    num_sites, num_samples, _ = genotypes.shape
+    variant_chunk, sample_chunk, _ = genotypes.chunks
+    error_mask = _create_error_array(
+        root, "call_genotype_error_mask", ["variants", "samples", "ploidy"], bool
+    )
+    error_count = _create_error_array(
+        root, "variant_genotype_error_count", ["variants"], np.int64
+    )
+    phase_mask = _create_error_array(
+        root, "call_genotype_phase", ["variants", "samples"], bool
+    )
+    switch_count = _create_error_array(
+        root, "sample_phase_switch_count", ["samples"], float
+    )
+    mispol_mask = _create_error_array(
+        root, "variant_mispolarisation_mask", ["variants"], bool
+    )
+    mispol_ancestral = _create_error_array(
+        root,
+        "variant_mispolarised_ancestral_state",
+        ["variants"],
+        root["variant_ancestral_state"].dtype,
+        filters=root["variant_ancestral_state"].filters,
+    )
+
+    rng = np.random.default_rng(seed=seed)
+    error_df = None
     if geno_multiplier > 0:
         error_df = pd.read_csv(error_csv_path, index_col=0)
-        G_geno_error = add_empirical_genotype_errors(
-            G_in,
-            rng,
-            fetch_empirical_probs,
-            df=error_df,
-            geno_multiplier=geno_multiplier,
-        )
+    for start in range(0, num_sites, variant_chunk):
+        stop = min(start + variant_chunk, num_sites)
+        G_in = source["call_genotype"][start:stop]
+        G_out = G_in
+        if geno_multiplier > 0:
+            G_out = add_empirical_genotype_errors(
+                G_in,
+                rng,
+                fetch_empirical_probs,
+                df=error_df,
+                geno_multiplier=geno_multiplier,
+            )
+        unchanged = G_out == G_in
+        error_mask[start:stop] = unchanged
+        error_count[start:stop] = np.sum(~unchanged, axis=(1, 2))
+        genotypes[start:stop] = G_out
+        if phase_ser == 0:
+            phase_mask[start:stop] = False
+        del G_in, G_out, unchanged
+
+    # Keep whole diplotypes together so switch detection crosses variant chunks.
+    if phase_ser > 0:
+        for start in range(0, num_samples, sample_chunk):
+            stop = min(start + sample_chunk, num_samples)
+            G_in = genotypes[:, start:stop, :]
+            G_out, phase, counts = add_phase_switch_errors(G_in, phase_ser, rng)
+            genotypes[:, start:stop, :] = G_out
+            phase_mask[:, start:stop] = phase
+            switch_count[start:stop] = counts
+            del G_in, G_out, phase, counts
     else:
-        G_geno_error = G_in
-    error_mask = G_geno_error == G_in
-    genotype_error_count = np.sum(~error_mask, axis=(1, 2))
-    add_xarray(
-        new_vars,
-        error_mask,
-        dims=["variants", "samples", "ploidy"],
-        name="call_genotype_error_mask",
-    )
-    add_xarray(
-        new_vars,
-        genotype_error_count,
-        dims=["variants"],
-        name="variant_genotype_error_count",
-    )
+        switch_count[:] = 0
 
-    # Phasing errors
-    G_out, call_genotype_phase, sample_switch_count = add_phase_switch_errors(
-        G_geno_error, phase_ser, rng
-    )
-    add_xarray(
-        new_vars,
-        call_genotype_phase,
-        dims=["variants", "samples"],
-        name="call_genotype_phase",
-    )
-    add_xarray(
-        new_vars, sample_switch_count, dims=["samples"], name="sample_phase_switch_count"
-    )
+    for start in range(0, num_sites, variant_chunk):
+        stop = min(start + variant_chunk, num_sites)
+        include_mispol, ancestral = unbiased_mispolarise(
+            root["variant_allele"][start:stop],
+            root["variant_ancestral_state"][start:stop],
+            mispol_rate,
+            rng,
+            root["variant_singleton_mask"][start:stop],
+        )
+        mispol_mask[start:stop] = ~include_mispol
+        mispol_ancestral[start:stop] = ancestral
 
-    # Mispolarisation errors
-    variant_allele = ds.variant_allele.values
-    ancestral_state = ds.variant_ancestral_state.values
-    singleton_mask = ds.variant_singleton_mask.values
-    include_mispol, mispol_ancestral = unbiased_mispolarise(
-        variant_allele,
-        ancestral_state,
-        mispol_rate,
-        rng,
-        singleton_mask,
-    )
-    add_xarray(
-        new_vars, ~include_mispol, dims=["variants"], name="variant_mispolarisation_mask"
-    )
-    add_xarray(
-        new_vars,
-        mispol_ancestral,
-        dims=["variants"],
-        name="variant_mispolarised_ancestral_state",
-    )
-
-    v_chunk = ds.call_genotype.chunks[0][0]
-    s_chunk = ds.call_genotype.chunks[1][0]
-    G_xr = xr.DataArray(
-        G_out, dims=["variants", "samples", "ploidy"], name="call_genotype"
-    ).chunk({"variants": v_chunk, "samples": s_chunk})
-    ds["call_genotype"] = G_xr
-    ds.update(new_vars)
-
-    contig_id = ds.contig_id.values.astype(str)
-    sample_id = ds.sample_id.values.astype(str)
-    ds["contig_id"] = ds.contig_id.copy(data=contig_id)
-    ds["sample_id"] = ds.sample_id.copy(data=sample_id)
-    sgkit.save_dataset(ds, output_path.parent)
+    for name in ["contig_id", "sample_id"]:
+        original = root[name]
+        values = original[:].astype(str)
+        attrs = dict(original.attrs)
+        array = root.create_dataset(
+            name,
+            data=values,
+            chunks=original.chunks,
+            compressor=original.compressor,
+            fill_value=None,
+            overwrite=True,
+        )
+        array.attrs.update(attrs)
+    zarr.consolidate_metadata(root.store)
     output_path.touch()
