@@ -62,18 +62,18 @@ def expand_data_frames():
         for model, contig, left, right, n, seed, rep in sim_metadata()
     ]
 
-def map_error_profiles(geno_multiplier, phase_ser, mispol_rate):
+def map_error_profiles(geno_multiplier, space_per_switch, mispol_rate):
     output = "unknown"
     for err_conf in config["error_configs"]:
         configured_geno_multiplier = float(err_conf["geno_multiplier"])
-        configured_phase_ser = float(err_conf["phase_ser"])
+        configured_space_per_switch = float(err_conf["space_per_switch"])
         configured_mispol_rate = float(err_conf["mispol_rate"])
         profile_name = err_conf["name"]
         if (
             math.isclose(
                 configured_geno_multiplier, float(geno_multiplier), rel_tol=1e-4
             )
-            and math.isclose(configured_phase_ser, float(phase_ser), rel_tol=1e-4)
+            and math.isclose(configured_space_per_switch, float(space_per_switch), rel_tol=1e-4)
             and math.isclose(
                 configured_mispol_rate, float(mispol_rate), rel_tol=1e-4
             )
@@ -195,7 +195,7 @@ rule add_errors:
     output:
         data_dir
         / "zarr_vcfs"
-        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}.zarr"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}.zarr"
         / ".mods_done",
     threads: get_resource("add_errors", "threads")
     resources:
@@ -205,10 +205,10 @@ rule add_errors:
         output_path = Path(output[0])
         error_csv_path = config["error_probs_path"]
         geno_multiplier = float(wildcards.geno_multiplier)
-        phase_ser = float(wildcards.phase_ser)
+        space_per_switch = float(wildcards.space_per_switch)
         mispol_rate = float(wildcards.mispol_rate)
         assert math.isfinite(geno_multiplier) and geno_multiplier >= 0
-        assert 0 <= phase_ser <= 1
+        assert math.isfinite(space_per_switch) and space_per_switch >= 0
         assert 0 <= mispol_rate <= 1
         seed = int(wildcards.seed) + int(wildcards.rep)
         errors.add_errors(
@@ -216,9 +216,10 @@ rule add_errors:
             output_path=output_path,
             error_csv_path=error_csv_path,
             geno_multiplier=geno_multiplier,
-            phase_ser=phase_ser,
+            space_per_switch=space_per_switch,
             mispol_rate=mispol_rate,
             seed=seed,
+            sequence_length=float(wildcards.right) - float(wildcards.left),
         )
 
 def zarr_with_errors(wildcards):
@@ -230,9 +231,9 @@ def zarr_with_errors(wildcards):
     seed = wildcards.seed
     rep = wildcards.rep
     geno_multiplier = wildcards.geno_multiplier
-    phase_ser = wildcards.phase_ser
+    space_per_switch = wildcards.space_per_switch
     mispol_rate = wildcards.mispol_rate
-    return data_dir / "zarr_vcfs" / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}.zarr"
+    return data_dir / "zarr_vcfs" / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}.zarr"
 
 rule generate_ancestors:
     input:
@@ -240,11 +241,11 @@ rule generate_ancestors:
     output:
         data_dir
         / "ancestors"
-        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}-v{version}-ancestors.zarr",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}-v{version}-ancestors.zarr",
     log:
         progress_dir
         / "generate_ancestors"
-        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}-v{version}.log",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}-v{version}.log",
     threads: get_resource("generate_ancestors", "threads")
     resources:
         mem_mb=get_resource("generate_ancestors", "mem_mb"),
@@ -271,11 +272,11 @@ def expand_ancestors_by_version(wildcards):
     seed = wildcards.seed
     rep = wildcards.rep
     geno_multiplier = wildcards.geno_multiplier
-    phase_ser = wildcards.phase_ser
+    space_per_switch = wildcards.space_per_switch
     mispol_rate = wildcards.mispol_rate
 
     return [
-        data_dir / "ancestors" / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}-v{version}-ancestors.zarr"
+        data_dir / "ancestors" / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}-v{version}-ancestors.zarr"
         for version in tsinfer_versions
     ]
 
@@ -288,7 +289,7 @@ checkpoint build_ancestor_chunks:
     output:
         data_dir
         / "chunks"
-        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}"
         / "metadata.json",
     threads: get_resource("build_ancestor_chunks", "threads")
     resources:
@@ -318,13 +319,13 @@ def chunk_input(wildcards):
     seed = wildcards.seed
     rep = wildcards.rep
     geno_multiplier = wildcards.geno_multiplier
-    phase_ser = wildcards.phase_ser
+    space_per_switch = wildcards.space_per_switch
     mispol_rate = wildcards.mispol_rate
     chunk_id = wildcards.chunk_id
     return (
         data_dir 
         / "chunks" 
-        / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}"
+        / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}"
         / f"unprocessed-chunk-{chunk_id}.csv"
     )
 
@@ -340,12 +341,12 @@ rule process_ancestor_chunk:
     output:
         data_dir 
         / "chunks" 
-        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}"
         / "processed-chunk-{chunk_id}.csv"
     log:
         progress_dir 
         / "process_chunks" 
-        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}"
         / "processed-chunk-{chunk_id}.log"
     threads: get_resource("process_ancestor_chunk", "threads")
     resources:
@@ -369,16 +370,16 @@ rule process_ancestor_chunk:
                 print(f"[INFO] Starting DF generation", flush=True)
                 ds = sgkit.load_dataset(Path(input.zarr_path).parent, consolidated=False)
                 geno_multiplier = float(wildcards.geno_multiplier)
-                phase_ser = float(wildcards.phase_ser)
+                space_per_switch = float(wildcards.space_per_switch)
                 mispol_rate = float(wildcards.mispol_rate)
                 error_profile = map_error_profiles(
                     geno_multiplier=geno_multiplier,
-                    phase_ser=phase_ser,
+                    space_per_switch=space_per_switch,
                     mispol_rate=mispol_rate,
                 )
                 assert error_profile != "unknown", (
                     "Error profile not found for "
-                    f"geno_multiplier={geno_multiplier}, phase_ser={phase_ser}, "
+                    f"geno_multiplier={geno_multiplier}, space_per_switch={space_per_switch}, "
                     f"mispol_rate={mispol_rate}"
                 )
                 utils.process_ancestor_chunk(
@@ -389,7 +390,6 @@ rule process_ancestor_chunk:
                     rep=wildcards.rep,
                     error_profile=error_profile,
                     geno_multiplier=geno_multiplier,
-                    phase_ser=phase_ser,
                     mispol_rate=mispol_rate,
                     output_path=output[0],
                 )
@@ -404,7 +404,7 @@ def get_checkpoint(wildcards):
         seed=wildcards.seed,
         rep=wildcards.rep,
         geno_multiplier=wildcards.geno_multiplier,
-        phase_ser=wildcards.phase_ser,
+        space_per_switch=wildcards.space_per_switch,
         mispol_rate=wildcards.mispol_rate,
     )
     return cp
@@ -420,7 +420,7 @@ rule process_all_chunks:
         lambda wildcards: expand(
             data_dir 
             / "chunks" 
-            / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}"
+            / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}"
             / "processed-chunk-{chunk_id}.csv",
             model=wildcards.model,
             contig=wildcards.contig,
@@ -430,7 +430,7 @@ rule process_all_chunks:
             seed = wildcards.seed,
             rep=wildcards.rep,
             geno_multiplier=wildcards.geno_multiplier,
-            phase_ser=wildcards.phase_ser,
+            space_per_switch=wildcards.space_per_switch,
             mispol_rate=wildcards.mispol_rate,
             chunk_id=chunk_ids(wildcards),
         ),
@@ -438,7 +438,7 @@ rule process_all_chunks:
         temp(
             data_dir 
             / "chunks" 
-            / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}"
+            / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}"
             / ".processed"
         ),
     run:
@@ -455,13 +455,13 @@ checkpoint aggregate_ancestor_chunks:
     input:
         processed=data_dir
         / "chunks"
-        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}"
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}"
         / ".processed",
         chunks=aggregate_chunk_paths,
     output:
         data_dir
         / "dataframes"
-        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}-ancestors.csv",
+        / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}-ancestors.csv",
     threads: get_resource("aggregate_ancestor_chunks", "threads")
     resources:
         mem_mb=get_resource("aggregate_ancestor_chunks", "mem_mb"),
@@ -484,12 +484,18 @@ def aggregated_dataframe_paths(wildcards):
         ):
             for err_conf in config["error_configs"]:
                 geno_multiplier = err_conf["geno_multiplier"]
-                phase_ser = err_conf["phase_ser"]
+                spacing = float(err_conf["space_per_switch"])
+                space_per_switch = "0"
+                if spacing > 0:
+                    space_per_switch = np.format_float_scientific(
+                        spacing, trim="-", exp_digits=1
+                    )
+                    space_per_switch = space_per_switch.replace("e+", "e")
                 mispol_rate = err_conf["mispol_rate"]
                 paths.append(
                     data_dir
                     / "dataframes"
-                    / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{phase_ser}-mispol{mispol_rate}-ancestors.csv"
+                    / f"{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}-ancestors.csv"
                 )
     
     assert len(paths) > 0

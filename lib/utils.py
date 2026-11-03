@@ -175,7 +175,6 @@ def process_ancestor_chunk(
     rep,
     error_profile,
     geno_multiplier,
-    phase_ser,
     mispol_rate,
     output_path,
 ):
@@ -206,6 +205,8 @@ def process_ancestor_chunk(
     assert true_genotypes.shape[0] == len(true_nodes)
     true_index_map = {true_node: i for i, true_node in enumerate(true_nodes)}
 
+    phase_ser = ds.attrs["phase_ser"]
+    space_per_switch = ds.attrs["space_per_switch"]
     ds_variant_pos = ds.variant_position.values
     include_mispol = ~ds.variant_mispolarisation_mask.values
     ds_shared_idx = np.searchsorted(ds_variant_pos, shared_pos[:-1])
@@ -292,6 +293,7 @@ def process_ancestor_chunk(
                         "replicate": rep,
                         "error_profile": error_profile,
                         "geno_multiplier": geno_multiplier,
+                        "space_per_switch": space_per_switch,
                         "phase_ser": phase_ser,
                         "mispol_rate": mispol_rate,
                         "version": version,

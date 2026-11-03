@@ -19,8 +19,9 @@ sims:
     seed: 1
 
 error_configs:
+  # Mean spacing between switches in bp; 0 disables phasing errors.
   - geno_multiplier: 0.0
-    phase_ser: 0.0
+    space_per_switch: 0
     mispol_rate: 0.0
     name: "none"
 

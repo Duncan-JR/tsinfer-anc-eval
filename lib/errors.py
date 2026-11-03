@@ -138,15 +138,15 @@ def phase_switch_diplotype(d_in, d_out, phase_array, switch_sites):
 
 def sample_phase_switches(d_in, phase_ser, rng):
     include_het = d_in.sum(axis=1) == 1
-    include_het_pairs = include_het[:-1] & include_het[1:]
-    het_pairs_idx = include_het_pairs.nonzero()[0]
+    het_sites = include_het.nonzero()[0]
+    switch_candidates = het_sites[1:]
 
-    include_switch_sites = rng.random(len(het_pairs_idx)) < phase_ser
+    include_switch_sites = rng.random(len(switch_candidates)) < phase_ser
     num_switches = np.sum(include_switch_sites)
     phase_array = np.zeros(d_in.shape[0], dtype=bool)
     if num_switches > 0:
-        # select rightmost site in each pair
-        switch_sites = het_pairs_idx[include_switch_sites] + 1
+        # Select the later heterozygote in each consecutive pair.
+        switch_sites = switch_candidates[include_switch_sites]
         d_out = np.zeros_like(d_in)
         d_out, phase_array = phase_switch_diplotype(
             d_in, d_out, phase_array, switch_sites
@@ -160,8 +160,8 @@ def sample_phase_switches(d_in, phase_ser, rng):
 def add_phase_switch_errors(G_in, phase_ser, rng):
     """
     Add random phase switches to every diplotype in the call genotypes array.
-    The switch error rate (SER) is the probability of a single phase switch
-    per adjacent heterozygous site pair.
+    The switch error rate (SER) is the independent switch probability per
+    pair of consecutive heterozygotes, allowing intervening homozygous sites.
     """
     assert len(np.unique(G_in)) <= 2
     assert len(G_in.shape) == 3
@@ -228,14 +228,18 @@ def add_errors(
     output_path,
     error_csv_path,
     geno_multiplier,
-    phase_ser,
+    space_per_switch,
     mispol_rate,
     seed,
+    sequence_length,
 ):
     """Add errors using variant blocks, then sample blocks for phase switches.
 
     The separate passes preserve the random draw order of the in-memory helpers:
     genotype errors by site, phase switches by sample, then mispolarisation.
+    Calibrate SER to the requested mean spacing in bp using the pooled number
+    of consecutive heterozygote pairs after genotype errors. Zero disables phase
+    switches; sequence_length is the simulated interval length in bp.
     Block widths come from the stored genotype chunks. Peak genotype memory is
     proportional to variants_per_chunk * samples, or (when phasing is enabled)
     variants * samples_per_chunk, rather than variants * samples.
@@ -243,8 +247,10 @@ def add_errors(
     if not np.isfinite(geno_multiplier) or geno_multiplier < 0:
         message = "geno_multiplier must be a finite value greater than or equal to 0"
         raise ValueError(message)
-    if not 0 <= phase_ser <= 1:
-        raise ValueError("phase_ser must be between 0 and 1")
+    if not np.isfinite(space_per_switch) or space_per_switch < 0:
+        raise ValueError("space_per_switch must be finite and nonnegative")
+    if not np.isfinite(sequence_length) or sequence_length <= 0:
+        raise ValueError("sequence_length must be finite and positive")
     if not 0 <= mispol_rate <= 1:
         raise ValueError("mispol_rate must be between 0 and 1")
 
@@ -286,6 +292,7 @@ def add_errors(
     )
 
     rng = np.random.default_rng(seed=seed)
+    het_counts = np.zeros(num_samples, dtype=np.int64)
     error_df = None
     if geno_multiplier > 0:
         error_df = pd.read_csv(error_csv_path, index_col=0)
@@ -305,9 +312,25 @@ def add_errors(
         error_mask[start:stop] = unchanged
         error_count[start:stop] = np.sum(~unchanged, axis=(1, 2))
         genotypes[start:stop] = G_out
-        if phase_ser == 0:
+        if space_per_switch > 0:
+            het_counts += np.sum(G_out.sum(axis=2) == 1, axis=0)
+        else:
             phase_mask[start:stop] = False
         del G_in, G_out, unchanged
+
+    phase_ser = 0.0
+    if space_per_switch > 0:
+        num_het_pairs = np.maximum(het_counts - 1, 0).sum()
+        if num_het_pairs == 0:
+            raise ValueError("Cannot simulate switches without heterozygote pairs")
+        phase_ser = num_samples * sequence_length / (space_per_switch * num_het_pairs)
+        if phase_ser > 1:
+            raise ValueError(
+                "space_per_switch is too small for the heterozygote density"
+            )
+    root.attrs.update(
+        space_per_switch=float(space_per_switch), phase_ser=float(phase_ser)
+    )
 
     # Keep whole diplotypes together so switch detection crosses variant chunks.
     if phase_ser > 0:
