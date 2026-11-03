@@ -7,6 +7,10 @@ import stdpopsim
 def simulate(model, contig, samples, left, right, seed):
     species = stdpopsim.get_species("HomSap")
     demographic_model = species.get_demographic_model(model)
+    mutation_rate = demographic_model.mutation_rate
+    if mutation_rate is None:
+        chromosome = species.genome.get_chromosome(contig)
+        mutation_rate = chromosome.mutation_rate
     contig = species.get_contig(
         contig,
         mutation_rate=0,
@@ -31,7 +35,6 @@ def simulate(model, contig, samples, left, right, seed):
             seed=seed,
             msprime_model="smc_prime",
         )
-    mutation_rate = demographic_model.mutation_rate
     return msprime.sim_mutations(
         ts, rate=mutation_rate, random_seed=seed, model=msprime.BinaryMutationModel()
     )
