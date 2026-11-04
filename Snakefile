@@ -197,6 +197,8 @@ rule add_errors:
         / "zarr_vcfs"
         / "{model}-{contig}-L{left}-R{right}-n{n}-s{seed}-rep{rep}-geno-{geno_multiplier}-phase{space_per_switch}-mispol{mispol_rate}.zarr"
         / ".mods_done",
+    params:
+        exclude_singletons=config.get("exclude_singletons", False),
     threads: get_resource("add_errors", "threads")
     resources:
         mem_mb=get_resource("add_errors", "mem_mb"),
@@ -220,6 +222,7 @@ rule add_errors:
             mispol_rate=mispol_rate,
             seed=seed,
             sequence_length=float(wildcards.right) - float(wildcards.left),
+            exclude_singletons=params.exclude_singletons,
         )
 
 def zarr_with_errors(wildcards):

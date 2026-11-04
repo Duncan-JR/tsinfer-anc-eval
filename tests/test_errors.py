@@ -347,17 +347,30 @@ class TestUnbiasedMispolarise:
         assert_array_equal(include_mispol, np.zeros(4, dtype=bool))
         assert_array_equal(mispol_ancestral, ancestral_state)
 
-    def test_maximum_mispol_rate(self, four_allele_example, rng):
+    def test_maximum_mispol_rate(self, four_allele_example, singleton_mask, rng):
         variant_allele, ancestral_state = four_allele_example
         include_mispol, mispol_ancestral = errors.unbiased_mispolarise(
             variant_allele,
             ancestral_state,
             mispol_rate=1,
             rng=rng,
-            singleton_mask=np.zeros(4, dtype=bool),
+            singleton_mask=singleton_mask,
         )
         assert_array_equal(include_mispol, np.ones(4, dtype=bool))
         assert_array_equal(mispol_ancestral, np.full(4, "T", dtype="<U1"))
+
+    def test_exclude_singletons(self, four_allele_example, singleton_mask, rng):
+        variant_allele, ancestral_state = four_allele_example
+        include_mispol, mispol_ancestral = errors.unbiased_mispolarise(
+            variant_allele,
+            ancestral_state,
+            mispol_rate=1,
+            rng=rng,
+            singleton_mask=singleton_mask,
+            exclude_singletons=True,
+        )
+        assert_array_equal(include_mispol, ~singleton_mask)
+        assert_array_equal(mispol_ancestral, np.array(["A", "T", "T", "A"]))
 
 
 class TestChunkedErrorAddition:
@@ -479,6 +492,36 @@ class TestChunkedErrorAddition:
         root = zarr.open_group(str(output_path.parent), mode="r")
         assert root["call_genotype"].chunks == (variant_chunk, sample_chunk, 2)
         assert root["call_genotype_error_mask"].chunks == root["call_genotype"].chunks
+
+    @pytest.mark.parametrize("exclude_singletons", [False, True])
+    @pytest.mark.parametrize("mispol_rate", [0, 1])
+    def test_singleton_exclusion(
+        self, tmp_path, dataset, error_csv_path, exclude_singletons, mispol_rate
+    ):
+        source_path = tmp_path / "source.zarr"
+        output_path = tmp_path / "output.zarr" / ".mods_done"
+        sgkit.save_dataset(dataset.chunk({"variants": 4, "samples": 3}), source_path)
+        assert dataset.variant_singleton_mask.any()
+        errors.add_errors(
+            source_path,
+            output_path,
+            error_csv_path,
+            geno_multiplier=0,
+            space_per_switch=0,
+            mispol_rate=mispol_rate,
+            seed=21,
+            sequence_length=17,
+            exclude_singletons=exclude_singletons,
+        )
+        root = zarr.open_group(str(output_path.parent), mode="r")
+        expected_mispol = np.full(17, bool(mispol_rate))
+        if exclude_singletons:
+            expected_mispol &= ~dataset.variant_singleton_mask.values
+        assert_array_equal(root["variant_mispolarisation_mask"][:], ~expected_mispol)
+        expected_ancestral = np.where(expected_mispol, "T", "A")
+        assert_array_equal(
+            root["variant_mispolarised_ancestral_state"][:], expected_ancestral
+        )
 
     @pytest.mark.parametrize("space_per_switch", [0, 40])
     def test_genotype_reads_are_bounded(

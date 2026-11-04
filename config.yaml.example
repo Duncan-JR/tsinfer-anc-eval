@@ -2,6 +2,8 @@ prefix: "set -euo pipefail; "
 data_dir: "data"
 progress_dir: ".progress"
 error_probs_path: "data/external/EmpiricalErrorPlatinum1000G.csv"
+# Protect true derived singletons from mispolarisation when true.
+exclude_singletons: false
 
 tsinfer:
   - version: "0.5.1"

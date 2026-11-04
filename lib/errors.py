@@ -187,8 +187,14 @@ def add_phase_switch_errors(G_in, phase_ser, rng):
 
 
 def unbiased_mispolarise(
-    variant_allele, ancestral_state, mispol_rate, rng, singleton_mask
+    variant_allele,
+    ancestral_state,
+    mispol_rate,
+    rng,
+    singleton_mask,
+    exclude_singletons=False,
 ):
+    """Mispolarise sites, optionally protecting true derived singletons."""
     assert 0 <= mispol_rate <= 1
     num_sites = len(ancestral_state)
     ancestral, derived = variant_allele[:, 0], variant_allele[:, 1]
@@ -196,7 +202,8 @@ def unbiased_mispolarise(
     singleton_mask = np.asarray(singleton_mask, dtype=bool)
     assert singleton_mask.shape == (num_sites,)
     include_mispol = rng.random(num_sites) < mispol_rate
-    include_mispol &= ~singleton_mask
+    if exclude_singletons:
+        include_mispol &= ~singleton_mask
     mispol_ancestral = ancestral_state.copy()
     mispol_ancestral[include_mispol] = derived[include_mispol]
 
@@ -232,6 +239,7 @@ def add_errors(
     mispol_rate,
     seed,
     sequence_length,
+    exclude_singletons=False,
 ):
     """Add errors using variant blocks, then sample blocks for phase switches.
 
@@ -243,6 +251,8 @@ def add_errors(
     Block widths come from the stored genotype chunks. Peak genotype memory is
     proportional to variants_per_chunk * samples, or (when phasing is enabled)
     variants * samples_per_chunk, rather than variants * samples.
+    Set exclude_singletons to protect true derived singletons from
+    mispolarisation; by default they are eligible like other sites.
     """
     if not np.isfinite(geno_multiplier) or geno_multiplier < 0:
         message = "geno_multiplier must be a finite value greater than or equal to 0"
@@ -353,6 +363,7 @@ def add_errors(
             mispol_rate,
             rng,
             root["variant_singleton_mask"][start:stop],
+            exclude_singletons=exclude_singletons,
         )
         mispol_mask[start:stop] = ~include_mispol
         mispol_ancestral[start:stop] = ancestral
